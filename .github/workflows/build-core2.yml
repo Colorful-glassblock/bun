@@ -57,7 +57,9 @@ jobs:
     - name: Generate build config
       run: |
         mkdir -p build/debug/codegen
-        bun bd --configure-only || {
+        if bun bd --configure-only; then
+          echo "✓ bun bd succeeded"
+        else
           echo "⚠️  bun bd failed, using fallback"
           cat > build/debug/codegen/build_options.rs << 'EOF'
           pub const BUILD_ARCH: &str = "x86_64";
@@ -66,7 +68,7 @@ jobs:
           pub const HAS_SIMD: bool = true;
           pub const ENABLE_SSSE3: bool = true;
           EOF
-        }
+        fi
         cat build/debug/codegen/build_options.rs
     
     - name: Setup Rust
