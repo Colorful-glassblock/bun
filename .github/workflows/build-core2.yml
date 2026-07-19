@@ -25,7 +25,31 @@ jobs:
           submodules: true
           fetch-depth: 1
 
-      # --- 强化版 vendor 克隆 ---
+      - name: Install Clang 21
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository -y "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-21 lld-21
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-21 100
+          sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100
+          clang --version
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev
+
+      # --- 克隆 vendor 依赖（URL 已修正） ---
       - name: Clone vendor dependencies
         run: |
           set -euo pipefail
@@ -34,10 +58,11 @@ jobs:
           rm -rf vendor/lolhtml
           mkdir -p vendor
 
-          REPO_URL="https://github.com/cloudflare/lol-html.git"
+          # ✅ 正确的仓库地址（没有连字符）
+          REPO_URL="https://github.com/cloudflare/lolhtml.git"
           TARGET_DIR="vendor/lolhtml"
 
-          echo "Cloning lol-html into ${TARGET_DIR}..."
+          echo "Cloning lolhtml into ${TARGET_DIR}..."
 
           # Retry git clone a few times to avoid transient network failures
           success=0
@@ -95,32 +120,7 @@ jobs:
 
           echo "✓ Vendor dependency ready"
 
-      # --- 安装 Clang 21（必须在 Bun 之前）---
-      - name: Install Clang 21
-        run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo add-apt-repository -y "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main"
-          sudo apt-get update
-          sudo apt-get install -y clang-21 lld-21
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 100
-          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-21 100
-          sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100
-          clang --version
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            pkg-config \
-            libssl-dev
-
-      # --- 生成构建配置（bun bd 或 fallback）---
+      # --- 生成构建配置（bun bd 或 fallback） ---
       - name: Generate build config
         run: |
           mkdir -p build/debug/codegen
