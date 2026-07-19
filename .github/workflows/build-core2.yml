@@ -17,110 +17,111 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
-    
+
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        fetch-depth: 1
-    
-    - name: Install Clang 21
-      run: |
-        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-        sudo add-apt-repository -y "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main"
-        sudo apt-get update
-        sudo apt-get install -y clang-21 lld-21
-        sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 100
-        sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-21 100
-        sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100
-        clang --version
-    
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
-      with:
-        bun-version: latest
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get install -y \
-          build-essential \
-          cmake \
-          pkg-config \
-          libssl-dev
-    
-    - name: Clone vendor dependencies
-      run: |
-        mkdir -p vendor
-        [ -d "vendor/lolhtml" ] || git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
-        [ -f "vendor/lolhtml/Cargo.toml" ] || (echo "lolhtml Cargo.toml missing" && exit 1)
-    
-    - name: Generate build config
-      run: |
-        mkdir -p build/debug/codegen
-        if bun bd --configure-only; then
-          echo "✓ bun bd succeeded"
-        else
-          echo "⚠️  bun bd failed, using fallback"
-          cat > build/debug/codegen/build_options.rs << 'EOF'
-          pub const BUILD_ARCH: &str = "x86_64";
-          pub const BUILD_OS: &str = "linux";
-          pub const IS_DEBUG: bool = false;
-          pub const HAS_SIMD: bool = true;
-          pub const ENABLE_SSSE3: bool = true;
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install Clang 21
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository -y "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-21 lld-21
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-21 100
+          sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-21 100
+          clang --version
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev
+
+      - name: Clone vendor dependencies
+        run: |
+          mkdir -p vendor
+          [ -d "vendor/lolhtml" ] || git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
+          [ -f "vendor/lolhtml/Cargo.toml" ] || (echo "lolhtml Cargo.toml missing" && exit 1)
+
+      - name: Generate build config
+        run: |
+          mkdir -p build/debug/codegen
+          if bun bd --configure-only; then
+            echo "✓ bun bd succeeded"
+          else
+            echo "⚠️  bun bd failed, using fallback"
+            # 使用 printf 代替 here-document，避免解析错误
+            printf '%s\n' \
+              'pub const BUILD_ARCH: &str = "x86_64";' \
+              'pub const BUILD_OS: &str = "linux";' \
+              'pub const IS_DEBUG: bool = false;' \
+              'pub const HAS_SIMD: bool = true;' \
+              'pub const ENABLE_SSSE3: bool = true;' \
+              > build/debug/codegen/build_options.rs
+          fi
+          cat build/debug/codegen/build_options.rs
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Configure Cargo
+        run: |
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml << 'EOF'
+          [build]
+          jobs = 4
+
+          [target.x86_64-unknown-linux-gnu]
+          linker = "clang"
+          rustflags = [
+              "-C", "target-cpu=core2",
+              "-C", "target-feature=+ssse3",
+              "-C", "lto=off",
+              "-C", "codegen-units=8",
+              "-C", "debuginfo=0",
+              "-C", "opt-level=0",
+              "-C", "panic=abort",
+          ]
+
+          [profile.release]
+          opt-level = 0
+          debug = false
+          lto = false
+          codegen-units = 8
+          panic = "abort"
+          incremental = false
           EOF
-        fi
-        cat build/debug/codegen/build_options.rs
-    
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: x86_64-unknown-linux-gnu
-    
-    - uses: Swatinem/rust-cache@v2
-    
-    - name: Configure Cargo
-      run: |
-        mkdir -p ~/.cargo
-        cat > ~/.cargo/config.toml << 'EOF'
-        [build]
-        jobs = 4
-        
-        [target.x86_64-unknown-linux-gnu]
-        linker = "clang"
-        rustflags = [
-            "-C", "target-cpu=core2",
-            "-C", "target-feature=+ssse3",
-            "-C", "lto=off",
-            "-C", "codegen-units=8",
-            "-C", "debuginfo=0",
-            "-C", "opt-level=0",
-            "-C", "panic=abort",
-        ]
-        
-        [profile.release]
-        opt-level = 0
-        debug = false
-        lto = false
-        codegen-units = 8
-        panic = "abort"
-        incremental = false
-        EOF
-    
-    - name: Build
-      run: |
-        cargo clean
-        cargo build --release --target x86_64-unknown-linux-gnu
-    
-    - name: Verify
-      run: |
-        BIN=$(find target/x86_64-unknown-linux-gnu/release/ -maxdepth 1 -type f -executable | head -1)
-        echo "Binary: $BIN"
-        echo "Size: $(du -h "$BIN" | cut -f1)"
-        echo "SSSE3 instructions count:"
-        objdump -d "$BIN" 2>/dev/null | grep -i ssse3 | wc -l
-    
-    - uses: actions/upload-artifact@v4
-      with:
-        name: bun-core2-binary
-        path: target/x86_64-unknown-linux-gnu/release/
-        if-no-files-found: error
+
+      - name: Build
+        run: |
+          cargo clean
+          cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Verify
+        run: |
+          BIN=$(find target/x86_64-unknown-linux-gnu/release/ -maxdepth 1 -type f -executable | head -1)
+          echo "Binary: $BIN"
+          echo "Size: $(du -h "$BIN" | cut -f1)"
+          echo "SSSE3 instructions count:"
+          objdump -d "$BIN" 2>/dev/null | grep -i ssse3 | wc -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bun-core2-binary
+          path: target/x86_64-unknown-linux-gnu/release/
+          if-no-files-found: error
