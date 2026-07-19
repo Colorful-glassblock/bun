@@ -21,6 +21,11 @@ jobs:
         submodules: recursive
         fetch-depth: 1
     
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+    
     - name: Setup vendor dependencies
       run: |
         mkdir -p vendor
@@ -33,6 +38,21 @@ jobs:
           exit 1
         fi
         echo "✓ Vendor dependencies ready"
+    
+    - name: Generate build configuration
+      run: |
+        # 创建必要的目录
+        mkdir -p build/debug/codegen
+        
+        # 运行bun配置
+        bun bd --configure-only
+        
+        # 验证生成的文件
+        if [ ! -f "build/debug/codegen/build_options.rs" ]; then
+          echo "Error: build_options.rs not generated"
+          exit 1
+        fi
+        echo "✓ Build configuration generated"
     
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -80,10 +100,18 @@ jobs:
     - name: Verify build
       run: |
         echo "=== Binary info ==="
-        ls -lh target/x86_64-unknown-linux-gnu/release/ | grep -v "\.d" | head -10
+        find target/x86_64-unknown-linux-gnu/release/ -maxdepth 1 -type f -executable | head -5
+        echo ""
+        echo "=== Binary size ==="
+        ls -lh target/x86_64-unknown-linux-gnu/release/ | grep -v "\.d" | grep -v "\.so" | head -10
         echo ""
         echo "=== SSSE3 verification ==="
-        find target/x86_64-unknown-linux-gnu/release/ -maxdepth 1 -type f -executable | head -1 | xargs -r objdump -d 2>/dev/null | grep -i ssse3 | head -10 || echo "No SSSE3 instructions found"
+        BIN=$(find target/x86_64-unknown-linux-gnu/release/ -maxdepth 1 -type f -executable | head -1)
+        if [ -n "$BIN" ]; then
+          objdump -d "$BIN" 2>/dev/null | grep -i ssse3 | head -10 || echo "No SSSE3 instructions found"
+        else
+          echo "No binary found to verify"
+        fi
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
