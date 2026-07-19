@@ -25,6 +25,50 @@ jobs:
           submodules: true
           fetch-depth: 1
 
+      # --- 强化版 vendor 克隆（初次尝试）---
+      - name: Clone vendor dependencies
+        run: |
+          set -euo pipefail
+          rm -rf vendor/lolhtml
+          mkdir -p vendor
+          REPO_URL="https://github.com/cloudflare/lol-html.git"
+          TARGET_DIR="vendor/lolhtml"
+          echo "Cloning lol-html into ${TARGET_DIR}..."
+          success=0
+          for i in 1 2 3; do
+            if git clone --depth 1 "${REPO_URL}" "${TARGET_DIR}"; then
+              success=1
+              break
+            else
+              echo "git clone attempt ${i} failed, retrying..."
+              sleep $((i * 2))
+            fi
+          done
+          if [ "$success" -ne 1 ]; then
+            echo "Error: git clone failed after retries"
+            exit 1
+          fi
+          found=$(find "${TARGET_DIR}" -maxdepth 4 -name Cargo.toml -print -quit || true)
+          if [ -z "$found" ]; then
+            echo "Error: Cargo.toml not found in ${TARGET_DIR}"
+            exit 1
+          fi
+          if [ "$found" != "${TARGET_DIR}/Cargo.toml" ]; then
+            echo "Cargo.toml in subdirectory, normalizing..."
+            sub_root=$(dirname "$found")
+            tmpdir=$(mktemp -d)
+            cp -a "$sub_root/." "$tmpdir/"
+            rm -rf "${TARGET_DIR:?}"/*
+            cp -a "$tmpdir/." "${TARGET_DIR}/"
+            rm -rf "$tmpdir"
+          fi
+          if [ ! -f "${TARGET_DIR}/Cargo.toml" ]; then
+            echo "Error: ${TARGET_DIR}/Cargo.toml still missing after normalization"
+            exit 1
+          fi
+          echo "✓ Vendor dependency ready"
+
+      # --- 安装 Clang 21（必须在 Bun 之前）---
       - name: Install Clang 21
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
@@ -49,78 +93,7 @@ jobs:
             pkg-config \
             libssl-dev
 
-      # --- 克隆 vendor 依赖（URL 已修正） ---
-      - name: Clone vendor dependencies
-        run: |
-          set -euo pipefail
-
-          # Remove any stale vendor directory and create parent
-          rm -rf vendor/lolhtml
-          mkdir -p vendor
-
-          # ✅ 正确的仓库地址（没有连字符）
-          REPO_URL="https://github.com/cloudflare/lolhtml.git"
-          TARGET_DIR="vendor/lolhtml"
-
-          echo "Cloning lolhtml into ${TARGET_DIR}..."
-
-          # Retry git clone a few times to avoid transient network failures
-          success=0
-          for i in 1 2 3; do
-            if git clone --depth 1 "${REPO_URL}" "${TARGET_DIR}"; then
-              success=1
-              break
-            else
-              echo "git clone attempt ${i} failed, retrying..."
-              sleep $((i * 2))
-            fi
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "Error: git clone failed after retries"
-            exit 1
-          fi
-
-          echo "Contents of ${TARGET_DIR} (top level):"
-          ls -la "${TARGET_DIR}" || true
-
-          # Try to find a Cargo.toml anywhere inside the repo (limit depth to 4)
-          found=$(find "${TARGET_DIR}" -maxdepth 4 -name Cargo.toml -print -quit || true)
-
-          if [ -z "$found" ]; then
-            echo "Error: Cargo.toml not found in ${TARGET_DIR} (repo layout unexpected)."
-            echo "Listing full tree for debugging:"
-            find "${TARGET_DIR}" -maxdepth 6 -type f -print
-            exit 1
-          fi
-
-          echo "Found Cargo.toml at: $found"
-
-          # If Cargo.toml is not at repo root, move the subcrate contents to TARGET_DIR so Cargo can read it.
-          if [ "$found" != "${TARGET_DIR}/Cargo.toml" ]; then
-            echo "Cargo.toml is in a subdirectory. Normalizing layout..."
-            sub_root=$(dirname "$found")
-            tmpdir=$(mktemp -d)
-            echo "Copying subcrate from $sub_root into temporary dir $tmpdir"
-            cp -a "$sub_root/." "$tmpdir/"
-            # Remove everything except .git to avoid leaving stray files; then copy subcrate over
-            rm -rf "${TARGET_DIR:?}"/*
-            cp -a "$tmpdir/." "${TARGET_DIR}/"
-            rm -rf "$tmpdir"
-            echo "Rewritten ${TARGET_DIR} to use subcrate contents from $sub_root"
-            echo "New ${TARGET_DIR} contents:"
-            ls -la "${TARGET_DIR}"
-          fi
-
-          # Final verification
-          if [ ! -f "${TARGET_DIR}/Cargo.toml" ]; then
-            echo "Error: ${TARGET_DIR}/Cargo.toml still missing after normalization"
-            exit 1
-          fi
-
-          echo "✓ Vendor dependency ready"
-
-      # --- 生成构建配置（bun bd 或 fallback） ---
+      # --- 生成构建配置（bun bd 或 fallback）---
       - name: Generate build config
         run: |
           mkdir -p build/debug/codegen
@@ -174,13 +147,36 @@ jobs:
           incremental = false
           EOF
 
+      # --- 构建（带 vendor 补救）---
       - name: Build
         run: |
-          # 再次确认 vendor/lolhtml 存在（防止缓存干扰）
+          # 如果 vendor/lolhtml/Cargo.toml 丢失，立即重新克隆
           if [ ! -f "vendor/lolhtml/Cargo.toml" ]; then
-            echo "ERROR: vendor/lolhtml/Cargo.toml missing before build!"
-            exit 1
+            echo "vendor/lolhtml/Cargo.toml not found, re-cloning immediately..."
+            rm -rf vendor/lolhtml
+            mkdir -p vendor
+            git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
+
+            # 处理子目录情况
+            if [ ! -f "vendor/lolhtml/Cargo.toml" ]; then
+              sub=$(find vendor/lolhtml -maxdepth 3 -name Cargo.toml -print -quit | head -1)
+              if [ -n "$sub" ]; then
+                subdir=$(dirname "$sub")
+                echo "Cargo.toml found in $subdir, moving contents to vendor/lolhtml/"
+                rm -rf vendor/lolhtml/*
+                cp -a "$subdir/." vendor/lolhtml/
+              fi
+            fi
+
+            if [ ! -f "vendor/lolhtml/Cargo.toml" ]; then
+              echo "ERROR: Cannot find vendor/lolhtml/Cargo.toml even after re-cloning"
+              exit 1
+            fi
+            echo "✓ vendor/lolhtml ready"
+          else
+            echo "✓ vendor/lolhtml/Cargo.toml already exists"
           fi
+
           cargo clean
           cargo build --release --target x86_64-unknown-linux-gnu
 
