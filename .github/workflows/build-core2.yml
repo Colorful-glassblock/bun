@@ -36,16 +36,37 @@ jobs:
       with:
         bun-version: latest
 
-    - name: Clone vendor dependencies
+    - name: Setup vendor dependencies
       run: |
+        # 确保vendor目录存在
         mkdir -p vendor
-        if [ ! -d "vendor/lolhtml" ]; then
+        
+        # 检查lolhtml是否已存在
+        if [ -d "vendor/lolhtml" ]; then
+          echo "lolhtml already exists, updating..."
+          cd vendor/lolhtml
+          git pull || true
+          cd ../..
+        else
+          echo "Cloning lol_html..."
+          # 直接克隆到vendor/lolhtml
           git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
         fi
+        
+        # 验证克隆是否成功
+        echo "Checking vendor/lolhtml contents:"
+        ls -la vendor/lolhtml/ || echo "Directory not found!"
+        
+        # 验证Cargo.toml存在
         if [ ! -f "vendor/lolhtml/Cargo.toml" ]; then
-          echo "Error: vendor/lolhtml/Cargo.toml not found"
+          echo "ERROR: vendor/lolhtml/Cargo.toml not found!"
+          echo "Contents of vendor/lolhtml:"
+          ls -la vendor/lolhtml/ || true
           exit 1
         fi
+        
+        echo "✓ Vendor dependencies ready"
+        cat vendor/lolhtml/Cargo.toml | head -20
 
     - name: Generate build configuration
       env:
@@ -103,6 +124,10 @@ jobs:
         CC: clang-21
         CXX: clang++-21
       run: |
+        # 再次确认vendor存在
+        echo "Vendor directory contents before build:"
+        ls -la vendor/ || true
+        
         cargo clean
         cargo build --release --target x86_64-unknown-linux-gnu
 
