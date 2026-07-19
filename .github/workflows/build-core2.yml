@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, master ]
   pull_request:
-    branches: [ main, master ]
+  branches: [ main, master ]
   workflow_dispatch:
 
 env:
@@ -18,6 +18,20 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        submodules: false
+        fetch-depth: 1
+
+    - name: Clone lol_html to vendor directory
+      run: |
+        mkdir -p vendor
+        if [ ! -d "vendor/lolhtml" ]; then
+          echo "Cloning lol_html..."
+          git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
+        else
+          echo "lol_html already exists"
+        fi
+        ls -la vendor/lolhtml/
 
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -29,25 +43,12 @@ jobs:
       with:
         cache-on-failure: true
 
-    - name: Install sccache (without wrapper)
-      run: |
-        cargo install sccache --locked --force
-
-    - name: Cache sccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/sccache
-        key: ${{ runner.os }}-sccache-${{ hashFiles('Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-sccache-
-
     - name: Configure Cargo
       run: |
         mkdir -p ~/.cargo
         cat > ~/.cargo/config.toml << 'EOF'
         [build]
         jobs = 4
-        rustc-wrapper = "sccache"
         
         [target.x86_64-unknown-linux-gnu]
         linker = "clang"
@@ -74,27 +75,19 @@ jobs:
       run: |
         cargo clean
         cargo build --release --target x86_64-unknown-linux-gnu
-      env:
-        RUSTC_WRAPPER: sccache
 
-    - name: Verify build artifacts
+    - name: Verify build
       run: |
-        echo "=== Binary info ==="
+        echo "=== Binary size ==="
         ls -lh target/x86_64-unknown-linux-gnu/release/ | grep -v "\.d" | head -10
         echo ""
-        echo "=== File type ==="
-        file target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep ELF | head -3
-        echo ""
-        echo "=== Architecture tags ==="
-        readelf -A target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | head -10 || true
-        echo ""
-        echo "=== SSSE3 instructions (sample) ==="
+        echo "=== SSSE3 verification ==="
         objdump -d target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep -i ssse3 | head -10 || echo "No SSSE3 instructions found"
 
-    - name: Upload binary artifacts
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: core2-ssse3-release
+        name: core2-ssse3-binary
         path: |
           target/x86_64-unknown-linux-gnu/release/
           !target/x86_64-unknown-linux-gnu/release/*.d
