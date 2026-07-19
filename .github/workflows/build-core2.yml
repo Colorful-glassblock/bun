@@ -50,9 +50,19 @@ jobs:
 
       - name: Clone vendor dependencies
         run: |
+          # 清理旧的残留目录（如果存在）
+          rm -rf vendor/lolhtml
           mkdir -p vendor
-          [ -d "vendor/lolhtml" ] || git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
-          [ -f "vendor/lolhtml/Cargo.toml" ] || (echo "lolhtml Cargo.toml missing" && exit 1)
+          echo "Cloning lol-html into vendor/lolhtml..."
+          git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
+          echo "Contents of vendor/lolhtml:"
+          ls -la vendor/lolhtml/
+          # 验证 Cargo.toml 存在
+          if [ ! -f "vendor/lolhtml/Cargo.toml" ]; then
+            echo "Error: vendor/lolhtml/Cargo.toml not found!"
+            exit 1
+          fi
+          echo "✓ Vendor dependency ready"
 
       - name: Generate build config
         run: |
@@ -61,7 +71,6 @@ jobs:
             echo "✓ bun bd succeeded"
           else
             echo "⚠️  bun bd failed, using fallback"
-            # 使用 printf 代替 here-document，避免解析错误
             printf '%s\n' \
               'pub const BUILD_ARCH: &str = "x86_64";' \
               'pub const BUILD_OS: &str = "linux";' \
