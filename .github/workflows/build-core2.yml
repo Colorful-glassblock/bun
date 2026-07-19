@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, master ]
   pull_request:
-  branches: [ main, master ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 env:
@@ -12,37 +12,38 @@ env:
 
 jobs:
   build:
-    name: Build (Core2 + SSSE3)
     runs-on: ubuntu-22.04
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        submodules: false
+        submodules: recursive
         fetch-depth: 1
-
-    - name: Clone lol_html to vendor directory
+    
+    - name: Setup vendor dependencies
       run: |
         mkdir -p vendor
         if [ ! -d "vendor/lolhtml" ]; then
           echo "Cloning lol_html..."
           git clone --depth 1 https://github.com/cloudflare/lol-html.git vendor/lolhtml
-        else
-          echo "lol_html already exists"
         fi
-        ls -la vendor/lolhtml/
-
+        if [ ! -f "vendor/lolhtml/Cargo.toml" ]; then
+          echo "Error: vendor/lolhtml/Cargo.toml not found"
+          exit 1
+        fi
+        echo "✓ Vendor dependencies ready"
+    
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: x86_64-unknown-linux-gnu
-
+    
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
       with:
         cache-on-failure: true
-
+    
     - name: Configure Cargo
       run: |
         mkdir -p ~/.cargo
@@ -70,20 +71,20 @@ jobs:
         panic = "abort"
         incremental = false
         EOF
-
+    
     - name: Build release binary
       run: |
         cargo clean
         cargo build --release --target x86_64-unknown-linux-gnu
-
+    
     - name: Verify build
       run: |
-        echo "=== Binary size ==="
+        echo "=== Binary info ==="
         ls -lh target/x86_64-unknown-linux-gnu/release/ | grep -v "\.d" | head -10
         echo ""
         echo "=== SSSE3 verification ==="
-        objdump -d target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep -i ssse3 | head -10 || echo "No SSSE3 instructions found"
-
+        find target/x86_64-unknown-linux-gnu/release/ -maxdepth 1 -type f -executable | head -1 | xargs -r objdump -d 2>/dev/null | grep -i ssse3 | head -10 || echo "No SSSE3 instructions found"
+    
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
