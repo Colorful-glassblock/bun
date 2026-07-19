@@ -9,8 +9,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-C target-cpu=core2 -C target-feature=+ssse3 -C lto=off -C codegen-units=8 -C debuginfo=0 -C opt-level=0 -C panic=abort"
-  RUSTC_WRAPPER: sccache
 
 jobs:
   build:
@@ -25,13 +23,15 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: x86_64-unknown-linux-gnu
-        components: clippy, rustfmt
 
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
       with:
         cache-on-failure: true
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+
+    - name: Install sccache (without wrapper)
+      run: |
+        cargo install sccache --locked --force
 
     - name: Cache sccache
       uses: actions/cache@v4
@@ -41,17 +41,13 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-sccache-
 
-    - name: Install sccache
-      run: |
-        cargo install sccache --locked --force
-
     - name: Configure Cargo
       run: |
         mkdir -p ~/.cargo
         cat > ~/.cargo/config.toml << 'EOF'
         [build]
         jobs = 4
-        rustflags = ["-C", "target-cpu=core2", "-C", "target-feature=+ssse3"]
+        rustc-wrapper = "sccache"
         
         [target.x86_64-unknown-linux-gnu]
         linker = "clang"
@@ -78,20 +74,22 @@ jobs:
       run: |
         cargo clean
         cargo build --release --target x86_64-unknown-linux-gnu
+      env:
+        RUSTC_WRAPPER: sccache
 
     - name: Verify build artifacts
       run: |
         echo "=== Binary info ==="
-        file target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep ELF || true
+        ls -lh target/x86_64-unknown-linux-gnu/release/ | grep -v "\.d" | head -10
+        echo ""
+        echo "=== File type ==="
+        file target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep ELF | head -3
         echo ""
         echo "=== Architecture tags ==="
-        readelf -A target/x86_64-unknown-linux-gnu/release/* 2>/dev/null || true
+        readelf -A target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | head -10 || true
         echo ""
         echo "=== SSSE3 instructions (sample) ==="
-        objdump -d target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep -i ssse3 | head -5 || echo "No SSSE3 found (may be compiled out)"
-        echo ""
-        echo "=== Binary size ==="
-        ls -lh target/x86_64-unknown-linux-gnu/release/* | grep -v "\.d" || true
+        objdump -d target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep -i ssse3 | head -10 || echo "No SSSE3 instructions found"
 
     - name: Upload binary artifacts
       uses: actions/upload-artifact@v4
