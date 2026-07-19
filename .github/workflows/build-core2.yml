@@ -1,0 +1,104 @@
+name: Build for Core2 with SSSE3
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-C target-cpu=core2 -C target-feature=+ssse3 -C lto=off -C codegen-units=8 -C debuginfo=0 -C opt-level=0 -C panic=abort"
+  RUSTC_WRAPPER: sccache
+
+jobs:
+  build:
+    name: Build (Core2 + SSSE3)
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-unknown-linux-gnu
+        components: clippy, rustfmt
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+
+    - name: Cache sccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/sccache
+        key: ${{ runner.os }}-sccache-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-sccache-
+
+    - name: Install sccache
+      run: |
+        cargo install sccache --locked --force
+
+    - name: Configure Cargo
+      run: |
+        mkdir -p ~/.cargo
+        cat > ~/.cargo/config.toml << 'EOF'
+        [build]
+        jobs = 4
+        rustflags = ["-C", "target-cpu=core2", "-C", "target-feature=+ssse3"]
+        
+        [target.x86_64-unknown-linux-gnu]
+        linker = "clang"
+        rustflags = [
+            "-C", "target-cpu=core2",
+            "-C", "target-feature=+ssse3",
+            "-C", "lto=off",
+            "-C", "codegen-units=8",
+            "-C", "debuginfo=0",
+            "-C", "opt-level=0",
+            "-C", "panic=abort",
+        ]
+        
+        [profile.release]
+        opt-level = 0
+        debug = false
+        lto = false
+        codegen-units = 8
+        panic = "abort"
+        incremental = false
+        EOF
+
+    - name: Build release binary
+      run: |
+        cargo clean
+        cargo build --release --target x86_64-unknown-linux-gnu
+
+    - name: Verify build artifacts
+      run: |
+        echo "=== Binary info ==="
+        file target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep ELF || true
+        echo ""
+        echo "=== Architecture tags ==="
+        readelf -A target/x86_64-unknown-linux-gnu/release/* 2>/dev/null || true
+        echo ""
+        echo "=== SSSE3 instructions (sample) ==="
+        objdump -d target/x86_64-unknown-linux-gnu/release/* 2>/dev/null | grep -i ssse3 | head -5 || echo "No SSSE3 found (may be compiled out)"
+        echo ""
+        echo "=== Binary size ==="
+        ls -lh target/x86_64-unknown-linux-gnu/release/* | grep -v "\.d" || true
+
+    - name: Upload binary artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: core2-ssse3-release
+        path: |
+          target/x86_64-unknown-linux-gnu/release/
+          !target/x86_64-unknown-linux-gnu/release/*.d
+        if-no-files-found: error
+        retention-days: 30
